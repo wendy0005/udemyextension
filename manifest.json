@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Udemy Transcript Helper",
+  "version": "0.1.0",
+  "description": "Content script helpers for learning from Udemy transcripts.",
+  "permissions": [],
+  "host_permissions": [
+    "https://www.udemy.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.udemy.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
