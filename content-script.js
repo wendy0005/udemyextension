@@ -339,6 +339,29 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
+    #${UI_CONTAINER_ID} .uth-progress {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      margin: 12px 0;
+    }
+    #${UI_CONTAINER_ID} .uth-progress-label {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.7);
+    }
+    #${UI_CONTAINER_ID} .uth-progress-track {
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.15);
+      overflow: hidden;
+    }
+    #${UI_CONTAINER_ID} .uth-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #22c55e;
+      transition: width 0.2s ease;
+    }
     #${UI_CONTAINER_ID} .uth-list {
       display: flex;
       flex-direction: column;
@@ -365,12 +388,135 @@
     }
   `;
 
+  const STORAGE_KEY_SELECTION = 'uth.selection';
+
   const uiState = {
     container: null,
     items: [],
     selectedIndexes: new Set(),
     selectionCountEl: null,
-    toggleAllBtn: null
+    toggleAllBtn: null,
+    exportBtn: null,
+    progressContainer: null,
+    progressFill: null,
+    progressLabel: null,
+    exporting: false,
+    skippedList: null
+  };
+
+  const storage = chrome?.storage?.local
+    ? {
+        get: (key) =>
+          new Promise((resolve) => {
+            chrome.storage.local.get(key, (result) => resolve(result?.[key]));
+          }),
+        set: (obj) =>
+          new Promise((resolve) => {
+            chrome.storage.local.set(obj, resolve);
+          })
+      }
+    : null;
+
+  const persistSelection = () => {
+    if (!storage) return;
+    const indexes = Array.from(uiState.selectedIndexes);
+    storage.set({ [STORAGE_KEY_SELECTION]: indexes });
+  };
+
+  const hydrateSelectionFromStorage = () => {
+    if (!storage) {
+      updateSelectionCount();
+      return;
+    }
+    storage.get(STORAGE_KEY_SELECTION).then((stored) => {
+      if (!Array.isArray(stored) || !stored.length) {
+        updateSelectionCount();
+        return;
+      }
+      const validIndexes = stored.filter((idx) => uiState.items.some((item) => item.index === idx));
+      if (!validIndexes.length) {
+        updateSelectionCount();
+        return;
+      }
+
+      uiState.selectedIndexes = new Set(validIndexes);
+      if (uiState.container) {
+        uiState.container.querySelectorAll('input[data-item-index]').forEach((checkbox) => {
+          const idx = Number.parseInt(checkbox.dataset.itemIndex ?? '', 10);
+          // eslint-disable-next-line no-param-reassign
+          checkbox.checked = uiState.selectedIndexes.has(idx);
+        });
+      }
+      updateSelectionCount();
+    });
+  };
+
+  const updateExportButtonState = () => {
+    if (!uiState.exportBtn) return;
+    if (uiState.exporting) {
+      uiState.exportBtn.disabled = true;
+      uiState.exportBtn.textContent = 'Exporting...';
+      return;
+    }
+
+    const hasSelection = uiState.selectedIndexes.size > 0;
+    uiState.exportBtn.disabled = !hasSelection;
+    uiState.exportBtn.textContent = 'Export selected to TXT';
+  };
+
+  const updateProgressLabel = (currentIndex, total, title) => {
+    if (!uiState.progressLabel) return;
+    if (!total) {
+      uiState.progressLabel.textContent = 'Preparing transcript export...';
+      return;
+    }
+    const safeTitle = title || 'Untitled lecture';
+    uiState.progressLabel.textContent = `Processing video ${currentIndex} of ${total}: ${safeTitle}`;
+  };
+
+  const updateProgressValue = (completed, total) => {
+    if (!uiState.progressFill) return;
+    const percent = total ? Math.min(100, Math.max(0, (completed / total) * 100)) : 0;
+    uiState.progressFill.style.width = `${percent}%`;
+  };
+
+  const beginExportUi = (totalVideos) => {
+    uiState.exporting = true;
+    updateExportButtonState();
+    if (uiState.progressContainer) {
+      uiState.progressContainer.style.display = 'flex';
+      updateProgressValue(0, totalVideos);
+      if (totalVideos > 0) {
+        updateProgressLabel(1, totalVideos, 'Preparing...');
+      } else {
+        updateProgressLabel(0, 0, 'Preparing transcript export...');
+      }
+    }
+  };
+
+  const completeExportUi = () => {
+    uiState.exporting = false;
+    if (uiState.progressContainer) {
+      uiState.progressContainer.style.display = 'none';
+      updateProgressValue(0, 1);
+    }
+    updateExportButtonState();
+  };
+
+  const resetSkippedList = () => {
+    if (!uiState.skippedList) return;
+    uiState.skippedList.header.style.display = 'none';
+    uiState.skippedList.list.style.display = 'none';
+    uiState.skippedList.list.innerHTML = '';
+  };
+
+  const addSkippedLecture = ({ videoNumber, title, reason }) => {
+    if (!uiState.skippedList) return;
+    const item = document.createElement('li');
+    item.textContent = `Video ${videoNumber}: ${title} (${reason})`;
+    uiState.skippedList.list.appendChild(item);
+    uiState.skippedList.header.style.display = '';
+    uiState.skippedList.list.style.display = '';
   };
 
   const ensureUiStyles = () => {
@@ -385,6 +531,13 @@
     const existing = document.getElementById(UI_CONTAINER_ID);
     if (existing) existing.remove();
     uiState.container = null;
+    uiState.selectionCountEl = null;
+    uiState.toggleAllBtn = null;
+    uiState.exportBtn = null;
+    uiState.progressContainer = null;
+    uiState.progressFill = null;
+    uiState.progressLabel = null;
+    uiState.skippedList = null;
   };
 
   const updateSelectionCount = () => {
@@ -397,6 +550,7 @@
       const allSelected = total > 0 && uiState.selectedIndexes.size === total;
       uiState.toggleAllBtn.textContent = allSelected ? 'Deselect all' : 'Select all';
     }
+    updateExportButtonState();
   };
 
   const setAllSelected = (shouldSelect) => {
@@ -413,6 +567,7 @@
     }
 
     updateSelectionCount();
+    persistSelection();
   };
 
   const onCheckboxChange = (event) => {
@@ -425,6 +580,7 @@
       uiState.selectedIndexes.delete(idx);
     }
     updateSelectionCount();
+    persistSelection();
   };
 
   const createListItem = (item) => {
@@ -462,10 +618,23 @@
     };
 
     recordSelection(selection);
+    beginExportUi(selection.items.length);
+    resetSkippedList();
+    const progressOptions = {
+      onVideoStart: ({ index, total, item }) => {
+        updateProgressLabel(index + 1, total, item.title);
+        updateProgressValue(index, total);
+      },
+      onVideoComplete: ({ index, total }) => {
+        updateProgressValue(index + 1, total);
+      }
+    };
     try {
-      await exportSelectionToText(selection);
+      await exportSelectionToText(selection, progressOptions);
     } catch (error) {
       console.error('Udemy Transcript Helper: export failed', error);
+    } finally {
+      completeExportUi();
     }
   };
 
@@ -547,18 +716,56 @@
       list.appendChild(emptyState);
     }
 
+    const progressContainer = document.createElement('div');
+    progressContainer.className = 'uth-progress';
+
+    const progressLabel = document.createElement('div');
+    progressLabel.className = 'uth-progress-label';
+    progressLabel.textContent = 'Preparing transcript export...';
+
+    const progressTrack = document.createElement('div');
+    progressTrack.className = 'uth-progress-track';
+
+    const progressFill = document.createElement('div');
+    progressFill.className = 'uth-progress-fill';
+    progressTrack.appendChild(progressFill);
+
+    progressContainer.appendChild(progressLabel);
+    progressContainer.appendChild(progressTrack);
+
+    uiState.progressContainer = progressContainer;
+    uiState.progressLabel = progressLabel;
+    uiState.progressFill = progressFill;
+
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button';
     exportBtn.className = 'uth-export-btn';
     exportBtn.textContent = 'Export selected to TXT';
-    exportBtn.disabled = videoItems.length === 0;
     exportBtn.addEventListener('click', handleExportClick);
+    uiState.exportBtn = exportBtn;
+
+    const skippedHeader = document.createElement('p');
+    skippedHeader.className = 'uth-description';
+    skippedHeader.textContent = 'Skipped lectures:';
+    skippedHeader.style.display = 'none';
+
+    const skippedList = document.createElement('ul');
+    skippedList.style.listStyle = 'disc';
+    skippedList.style.paddingLeft = '18px';
+    skippedList.style.fontSize = '12px';
+    skippedList.style.color = 'rgba(255, 255, 255, 0.8)';
+    skippedList.style.margin = '8px 0 0';
+    skippedList.style.display = 'none';
+    uiState.skippedList = { header: skippedHeader, list: skippedList };
 
     body.appendChild(description);
     body.appendChild(summary);
     body.appendChild(selectionCount);
     body.appendChild(actions);
     body.appendChild(list);
+    body.appendChild(progressContainer);
+    body.appendChild(skippedHeader);
+    body.appendChild(skippedList);
     body.appendChild(exportBtn);
 
     panel.appendChild(header);
@@ -567,6 +774,7 @@
     document.body.appendChild(panel);
     uiState.container = panel;
     updateSelectionCount();
+    hydrateSelectionFromStorage();
 
     console.info(`Udemy Transcript Helper: ${items.length} lectures detected.`);
   };
@@ -605,6 +813,7 @@
     const element = ensureCurriculumElementClickable(item);
     if (!element) {
       console.warn(`Udemy Transcript Helper: curriculum item ${videoNumber} missing from DOM.`);
+      addSkippedLecture({ videoNumber, title: item.title, reason: 'Curriculum element missing' });
       return null;
     }
 
@@ -614,6 +823,7 @@
     const panel = await ensureTranscriptPanelOpen();
     if (!panel) {
       console.warn(`Udemy Transcript Helper: transcript panel not available for video ${videoNumber}.`);
+      addSkippedLecture({ videoNumber, title: item.title, reason: 'Transcript panel not found' });
       return null;
     }
 
@@ -624,30 +834,43 @@
 
     if (!lines) {
       console.warn(`Udemy Transcript Helper: transcript lines not detected for video ${videoNumber}.`);
+      addSkippedLecture({ videoNumber, title: item.title, reason: 'Transcript lines missing' });
       return null;
     }
 
     return extractTranscript();
   };
 
-  const collectTranscriptsForSelection = async (selection) => {
+  const collectTranscriptsForSelection = async (selection, options = {}) => {
+    const { onVideoStart, onVideoComplete } = options;
     const entries = [];
     for (let idx = 0; idx < selection.items.length; idx += 1) {
       const item = selection.items[idx];
       const videoNumber = (item.index ?? idx) + 1;
+      onVideoStart?.({ index: idx, total: selection.items.length, item, videoNumber });
       const transcript = await collectTranscriptForItem(item, videoNumber);
       await closeTranscriptPanel();
-      if (!transcript?.items?.length) continue;
+      const success = Boolean(transcript?.items?.length);
 
-      transcript.items.forEach((line, lineIndex) => {
-        entries.push({
-          videoNumber,
-          title: item.title,
-          lineNumber: lineIndex + 1,
-          timestampSeconds: line.timestampSeconds ?? '',
-          timestampRaw: line.rawTimestamp ?? '',
-          text: line.text
+      if (success) {
+        transcript.items.forEach((line, lineIndex) => {
+          entries.push({
+            videoNumber,
+            title: item.title,
+            lineNumber: lineIndex + 1,
+            timestampSeconds: line.timestampSeconds ?? '',
+            timestampRaw: line.rawTimestamp ?? '',
+            text: line.text
+          });
         });
+      }
+
+      onVideoComplete?.({
+        index: idx,
+        total: selection.items.length,
+        item,
+        videoNumber,
+        success
       });
     }
     return entries;
@@ -687,7 +910,7 @@
     return sections.join('\n\n');
   };
 
-  const exportSelectionToText = async (selectionOverride) => {
+  const exportSelectionToText = async (selectionOverride, options = {}) => {
     if (exportInProgress) {
       console.info('Udemy Transcript Helper: export already running.');
       return null;
@@ -701,11 +924,12 @@
         return null;
       }
 
-      const entries = await collectTranscriptsForSelection(selection);
-      if (!entries.length) {
-        console.warn('Udemy Transcript Helper: no transcript entries collected.');
-        return null;
-      }
+      const entries = await collectTranscriptsForSelection(selection, options);
+    if (!entries.length) {
+      console.warn('Udemy Transcript Helper: no transcript entries collected.');
+      addSkippedLecture({ videoNumber: '-', title: 'Export', reason: 'No transcripts captured' });
+      return null;
+    }
 
       const text = buildTranscriptText(entries);
       const filename = `udemy-transcripts-${Date.now()}.txt`;
