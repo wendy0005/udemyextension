@@ -93,16 +93,7 @@
       setTimeout(resolve, duration);
     });
 
-  const csvEscape = (value) => {
-    const text = value ?? '';
-    if (text === null || text === undefined) return '';
-    const normalized = String(text).replace(/\r?\n|\r/g, ' ');
-    return /[",]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized;
-  };
-
-  const buildCsv = (rows) => rows.map((row) => row.map(csvEscape).join(',')).join('\r\n');
-
-  const triggerDownload = (filename, content, mime = 'text/csv') => {
+  const triggerDownload = (filename, content, mime = 'text/plain') => {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -378,7 +369,8 @@
     container: null,
     items: [],
     selectedIndexes: new Set(),
-    selectionCountEl: null
+    selectionCountEl: null,
+    toggleAllBtn: null
   };
 
   const ensureUiStyles = () => {
@@ -401,6 +393,10 @@
     uiState.selectionCountEl.textContent = total
       ? `${uiState.selectedIndexes.size} of ${total} video lectures selected`
       : 'No video lectures detected';
+    if (uiState.toggleAllBtn) {
+      const allSelected = total > 0 && uiState.selectedIndexes.size === total;
+      uiState.toggleAllBtn.textContent = allSelected ? 'Deselect all' : 'Select all';
+    }
   };
 
   const setAllSelected = (shouldSelect) => {
@@ -467,7 +463,7 @@
 
     recordSelection(selection);
     try {
-      await exportSelectionToCsv(selection);
+      await exportSelectionToText(selection);
     } catch (error) {
       console.error('Udemy Transcript Helper: export failed', error);
     }
@@ -515,7 +511,7 @@
 
     const description = document.createElement('p');
     description.className = 'uth-description';
-    description.textContent = 'Check the lectures you want transcripts for, then export as CSV.';
+    description.textContent = 'Check the lectures you want transcripts for, then export as TXT.';
 
     const summary = document.createElement('p');
     summary.className = 'uth-description';
@@ -528,18 +524,16 @@
     const actions = document.createElement('div');
     actions.className = 'uth-actions';
 
-    const selectAllBtn = document.createElement('button');
-    selectAllBtn.type = 'button';
-    selectAllBtn.textContent = 'Select all';
-    selectAllBtn.addEventListener('click', () => setAllSelected(true));
+    const toggleAllBtn = document.createElement('button');
+    toggleAllBtn.type = 'button';
+    toggleAllBtn.textContent = 'Select all';
+    toggleAllBtn.addEventListener('click', () => {
+      const allSelected = uiState.items.length > 0 && uiState.selectedIndexes.size === uiState.items.length;
+      setAllSelected(!allSelected);
+    });
+    uiState.toggleAllBtn = toggleAllBtn;
 
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.textContent = 'Clear';
-    clearBtn.addEventListener('click', () => setAllSelected(false));
-
-    actions.appendChild(selectAllBtn);
-    actions.appendChild(clearBtn);
+    actions.appendChild(toggleAllBtn);
 
     const list = document.createElement('div');
     list.className = 'uth-list';
@@ -556,7 +550,7 @@
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button';
     exportBtn.className = 'uth-export-btn';
-    exportBtn.textContent = 'Export selected to CSV';
+    exportBtn.textContent = 'Export selected to TXT';
     exportBtn.disabled = videoItems.length === 0;
     exportBtn.addEventListener('click', handleExportClick);
 
@@ -637,7 +631,7 @@
   };
 
   const collectTranscriptsForSelection = async (selection) => {
-    const rows = [];
+    const entries = [];
     for (let idx = 0; idx < selection.items.length; idx += 1) {
       const item = selection.items[idx];
       const videoNumber = (item.index ?? idx) + 1;
@@ -646,22 +640,54 @@
       if (!transcript?.items?.length) continue;
 
       transcript.items.forEach((line, lineIndex) => {
-        rows.push([
+        entries.push({
           videoNumber,
-          item.title,
-          lineIndex + 1,
-          line.timestampSeconds ?? '',
-          line.rawTimestamp ?? '',
-          line.text
-        ]);
+          title: item.title,
+          lineNumber: lineIndex + 1,
+          timestampSeconds: line.timestampSeconds ?? '',
+          timestampRaw: line.rawTimestamp ?? '',
+          text: line.text
+        });
       });
     }
-    return rows;
+    return entries;
   };
 
   let exportInProgress = false;
 
-  const exportSelectionToCsv = async (selectionOverride) => {
+  const buildTranscriptText = (entries) => {
+    if (!entries.length) return '';
+
+    const grouped = entries.reduce((acc, entry) => {
+      const key = `${entry.videoNumber}::${entry.title}`;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(entry);
+      return acc;
+    }, {});
+
+    const sections = Object.entries(grouped)
+      .sort((a, b) => {
+        const [aNum] = a[0].split('::');
+        const [bNum] = b[0].split('::');
+        return Number(aNum) - Number(bNum);
+      })
+      .map(([key, items]) => {
+        const [videoNumber, title] = key.split('::');
+        const header = `Video ${videoNumber}: ${title}`;
+        const body = items
+          .sort((a, b) => a.lineNumber - b.lineNumber)
+          .map((entry) => {
+            const prefix = entry.timestampRaw ? `[${entry.timestampRaw}] ` : '';
+            return `${prefix}${entry.text}`;
+          })
+          .join('\n');
+        return `${header}\n${'-'.repeat(header.length)}\n${body}`;
+      });
+
+    return sections.join('\n\n');
+  };
+
+  const exportSelectionToText = async (selectionOverride) => {
     if (exportInProgress) {
       console.info('Udemy Transcript Helper: export already running.');
       return null;
@@ -675,18 +701,17 @@
         return null;
       }
 
-      const rows = await collectTranscriptsForSelection(selection);
-      if (!rows.length) {
-        console.warn('Udemy Transcript Helper: no transcript rows collected.');
+      const entries = await collectTranscriptsForSelection(selection);
+      if (!entries.length) {
+        console.warn('Udemy Transcript Helper: no transcript entries collected.');
         return null;
       }
 
-      const header = ['Video Number', 'Video Title', 'Line Number', 'Timestamp (s)', 'Timestamp Raw', 'Caption'];
-      const csv = buildCsv([header, ...rows]);
-      const filename = `udemy-transcripts-${Date.now()}.csv`;
-      triggerDownload(filename, csv);
-      console.info(`Udemy Transcript Helper: exported ${rows.length} transcript lines to ${filename}.`);
-      return { filename, rowCount: rows.length, selection };
+      const text = buildTranscriptText(entries);
+      const filename = `udemy-transcripts-${Date.now()}.txt`;
+      triggerDownload(filename, text, 'text/plain');
+      console.info(`Udemy Transcript Helper: exported ${entries.length} transcript lines to ${filename}.`);
+      return { filename, lineCount: entries.length, selection };
     } finally {
       exportInProgress = false;
     }
@@ -702,7 +727,7 @@
       findCurriculumItems,
       ensureTranscriptPanelOpen,
       closeTranscriptPanel,
-      exportSelectionToCsv,
+      exportSelectionToText,
       showSelectionPanel
     };
 
@@ -713,6 +738,18 @@
       startAutomationFlow();
     }, AUTO_START_DELAY_MS);
   };
+
+  if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message?.type === 'udemyTranscriptHelper.showPanel') {
+        showSelectionPanel()
+          .then((count) => sendResponse({ ok: true, count }))
+          .catch((error) => sendResponse({ ok: false, error: error?.message ?? String(error) }));
+        return true;
+      }
+      return undefined;
+    });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', exposeHelpers, { once: true });

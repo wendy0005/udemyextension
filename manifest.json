@@ -3,7 +3,15 @@
   "name": "Udemy Transcript Helper",
   "version": "0.1.0",
   "description": "Content script helpers for learning from Udemy transcripts.",
-  "permissions": [],
+  "permissions": [
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Udemy Transcript Helper"
+  },
   "host_permissions": [
     "https://www.udemy.com/*"
   ],
