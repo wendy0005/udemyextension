@@ -93,6 +93,8 @@
       setTimeout(resolve, duration);
     });
 
+  const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+
   const triggerDownload = (filename, content, mime = 'text/plain') => {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -285,6 +287,8 @@
       font-weight: 600;
       font-size: 15px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      cursor: move;
+      user-select: none;
     }
     #${UI_CONTAINER_ID} .uth-close-btn {
       background: transparent;
@@ -401,7 +405,12 @@
     progressFill: null,
     progressLabel: null,
     exporting: false,
-    skippedList: null
+    skippedList: null,
+    drag: {
+      active: false,
+      offsetX: 0,
+      offsetY: 0
+    }
   };
 
   const storage = chrome?.storage?.local
@@ -519,6 +528,39 @@
     uiState.skippedList.list.style.display = '';
   };
 
+  const onDragMove = (event) => {
+    if (!uiState.drag.active || !uiState.container) return;
+    const { offsetX, offsetY } = uiState.drag;
+    const width = uiState.container.offsetWidth;
+    const height = uiState.container.offsetHeight;
+    const left = clampValue(event.clientX - offsetX, 0, window.innerWidth - width);
+    const top = clampValue(event.clientY - offsetY, 0, window.innerHeight - height);
+    uiState.container.style.left = `${left}px`;
+    uiState.container.style.top = `${top}px`;
+  };
+
+  const endDrag = () => {
+    if (!uiState.drag.active) return;
+    uiState.drag.active = false;
+    window.removeEventListener('mousemove', onDragMove);
+    window.removeEventListener('mouseup', endDrag);
+  };
+
+  const startDrag = (event) => {
+    if (!uiState.container) return;
+    event.preventDefault();
+    const rect = uiState.container.getBoundingClientRect();
+    uiState.drag.active = true;
+    uiState.drag.offsetX = event.clientX - rect.left;
+    uiState.drag.offsetY = event.clientY - rect.top;
+    uiState.container.style.right = 'auto';
+    uiState.container.style.bottom = 'auto';
+    uiState.container.style.left = `${rect.left}px`;
+    uiState.container.style.top = `${rect.top}px`;
+    window.addEventListener('mousemove', onDragMove);
+    window.addEventListener('mouseup', endDrag);
+  };
+
   const ensureUiStyles = () => {
     if (document.getElementById(UI_STYLE_ID)) return;
     const style = document.createElement('style');
@@ -530,6 +572,7 @@
   const removeSelectionPanel = () => {
     const existing = document.getElementById(UI_CONTAINER_ID);
     if (existing) existing.remove();
+    endDrag();
     uiState.container = null;
     uiState.selectionCountEl = null;
     uiState.toggleAllBtn = null;
@@ -674,6 +717,7 @@
 
     header.appendChild(heading);
     header.appendChild(closeBtn);
+    header.addEventListener('mousedown', startDrag);
 
     const body = document.createElement('div');
     body.className = 'uth-body';

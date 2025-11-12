@@ -29,7 +29,7 @@
 6. Activation:
    - Click the extension icon (or wait ~7 s after page load) to surface the floating “Transcript Helper” panel. The icon triggers `showSelectionPanel()` via the background service worker.
    - Watches the DOM (mutation observer + polling) until the curriculum list appears.
-   - Renders a floating “Transcript Helper” checklist that lists only the playable video lectures (identified via the `#icon-video` SVG). The user can select/deselect any combination, then press “Export selected to TXT” to drive automation. Selections persist across reloads via `chrome.storage` so the same lecture set remains checked.
+   - Renders a floating “Transcript Helper” checklist that lists only the playable video lectures (identified via the `#icon-video` SVG). The panel is draggable (grab the header) and selections persist across reloads via `chrome.storage`, so the same lecture set remains checked.
    - During export the agent clicks each selected video in order, opens the transcript toggle, copies all transcript lines, closes the transcript sidebar, and repeats until finished. A text file named `udemy-transcripts-<timestamp>.txt` downloads when complete (grouped by lecture with timestamps inline). A progress bar on the helper panel updates per lecture so the user can see how many videos remain.
    - If any lecture cannot be processed (missing DOM nodes, no transcript, etc.) it is listed under “Skipped lectures” in the panel with a short reason so the user can retry manually.
    Check DevTools console for helper logs if nothing appears; the helper reports when it cannot find the panel/list within 15 s and whether export succeeded.
@@ -45,4 +45,5 @@
 - Consider wiring a messaging bridge (e.g., via `chrome.runtime.sendMessage`) once background or popup scripts exist.
 - If build tooling becomes necessary, keep raw sources under `src/` and update `manifest.json` paths accordingly.
 - When automating navigation through lessons, reuse `showSelectionPanel()` / `findCurriculumItems()` so the agent can honor whatever combination of video lectures the user selects before export. The UI’s “Select all” button now toggles between “Select all” and “Deselect all” as the selection changes, so automation should not assume the button label is static. Final transcript exports are plain-text and grouped per video; adjust `buildTranscriptText` if a different format is needed.
- - Persisted selections live under `chrome.storage.local['uth.selection']`. If you add modes like “only unwatched”, keep the stored payload backward compatible.
+- Persisted selections live under `chrome.storage.local['uth.selection']`. If you add modes like “only unwatched”, keep the stored payload backward compatible.
+- Host permissions currently cover both `https://www.udemy.com/*` and `https://cognizant.udemy.com/*`. Add any future corporate subdomains to both `host_permissions` and `content_scripts.matches`.
