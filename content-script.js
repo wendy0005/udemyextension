@@ -1007,23 +1007,25 @@
   };
 
   const expandAllSections = async () => {
-    const hasToggles = await waitForCondition(() => {
-      const toggles = document.querySelectorAll('[data-purpose^="section-panel-"] button[aria-expanded]');
-      return toggles.length ? true : null;
-    }, { timeout: 15000 });
-
-    if (!hasToggles) {
-      console.warn('Udemy Transcript Helper: section panels not detected.');
-      return;
-    }
-
-    const toggles = Array.from(document.querySelectorAll('[data-purpose^="section-panel-"] button[aria-expanded="false"]'));
-    for (const toggle of toggles) {
-      toggle.click();
-      await waitMs(300);
-    }
-    if (toggles.length > 0) {
-      await waitMs(1500);
+    const maxSections = 100;
+    for (let i = 0; i < maxSections; i++) {
+      const sec = document.querySelector(`[data-purpose="section-panel-${i}"]`);
+      if (!sec) {
+        break;
+      }
+      
+      const toggle = sec.querySelector('button[aria-expanded]');
+      if (toggle && toggle.getAttribute('aria-expanded') === 'false') {
+        toggle.scrollIntoView?.({ behavior: 'auto', block: 'center' });
+        toggle.click();
+        
+        await waitForCondition(() => {
+          const freshToggle = document.querySelector(`[data-purpose="section-panel-${i}"] button[aria-expanded]`);
+          return freshToggle?.getAttribute('aria-expanded') === 'true';
+        }, { timeout: 8000 });
+        
+        await waitMs(300);
+      }
     }
   };
 
