@@ -213,27 +213,76 @@
   };
 
   const findCurriculumItems = () => {
-    const activeSelector = CURRICULUM_ITEM_SELECTORS.find((selector) => document.querySelector(selector));
-    if (!activeSelector) return [];
+    const sections = Array.from(document.querySelectorAll('[data-purpose^="section-panel-"]'));
+    if (!sections.length) {
+      const activeSelector = CURRICULUM_ITEM_SELECTORS.find((selector) => document.querySelector(selector));
+      if (!activeSelector) return [];
+      const elements = Array.from(document.querySelectorAll(activeSelector));
+      return elements.map((element, index) => {
+        const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => element.querySelector(sel)).find(Boolean);
+        const title = cleanText(titleEl?.textContent ?? `Video ${index + 1}`);
+        const typeInfo = getCurriculumItemType(element);
+        const type = typeInfo.type;
+        const isVideo = type === 'video';
+        return {
+          element,
+          title,
+          index,
+          type,
+          isVideo,
+          sectionTitle: 'Course Content',
+          sectionIndex: 0,
+          meta: typeInfo
+        };
+      });
+    }
 
-    const elements = Array.from(document.querySelectorAll(activeSelector));
-    return elements.map((element, index) => {
-      const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => element.querySelector(sel)).find(Boolean);
-      const title = cleanText(titleEl?.textContent ?? `Video ${index + 1}`);
-      const typeInfo = getCurriculumItemType(element);
-      const type = typeInfo.type;
-      const isVideo = type === 'video';
+    const allItems = [];
+    let absoluteIndex = 0;
 
-      console.info('Udemy Transcript Helper: curriculum item detected', {
-        index,
-        title,
-        type,
-        iconHref: typeInfo.hrefValue,
-        ariaLabel: typeInfo.buttonLabelRaw
+    sections.forEach((sec, secIdx) => {
+      const sectionTitleEl = sec.querySelector('button[aria-expanded], [class*="section-title"]');
+      const sectionTitle = sectionTitleEl ? cleanText(sectionTitleEl.textContent) : `Section ${secIdx + 1}`;
+      
+      const activeSelector = CURRICULUM_ITEM_SELECTORS.find((selector) => sec.querySelector(selector));
+      const rawElements = activeSelector ? Array.from(sec.querySelectorAll(activeSelector)) : [];
+      
+      const uniqueElements = [];
+      const seenKeys = new Set();
+      
+      rawElements.forEach(el => {
+        const purpose = el.getAttribute('data-purpose') || '';
+        const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => el.querySelector(sel)).find(Boolean);
+        const title = cleanText(titleEl?.textContent ?? '');
+        const key = purpose || title;
+        if (key && !seenKeys.has(key)) {
+          seenKeys.add(key);
+          uniqueElements.push(el);
+        }
       });
 
-      return { element, title, index, type, isVideo, meta: typeInfo };
+      uniqueElements.forEach((element) => {
+        const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => element.querySelector(sel)).find(Boolean);
+        const title = cleanText(titleEl?.textContent ?? `Video ${absoluteIndex + 1}`);
+        const typeInfo = getCurriculumItemType(element);
+        const type = typeInfo.type;
+        const isVideo = type === 'video';
+
+        allItems.push({
+          element,
+          title,
+          index: absoluteIndex,
+          type,
+          isVideo,
+          sectionTitle,
+          sectionIndex: secIdx,
+          meta: typeInfo
+        });
+        absoluteIndex += 1;
+      });
     });
+
+    return allItems;
   };
 
   const ensureTranscriptPanelOpen = async () => {
@@ -396,17 +445,42 @@
       overflow-y: auto;
       padding-right: 6px;
     }
+    #${UI_CONTAINER_ID} .uth-section-header {
+      padding: 8px 4px 4px;
+      margin-top: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    #${UI_CONTAINER_ID} .uth-section-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      color: #38bdf8;
+    }
+    #${UI_CONTAINER_ID} .uth-section-checkbox {
+      margin: 0;
+      cursor: pointer;
+    }
+    #${UI_CONTAINER_ID} .uth-section-title {
+      line-height: 1.4;
+    }
     #${UI_CONTAINER_ID} .uth-item {
       display: flex;
       gap: 8px;
       align-items: flex-start;
-      padding: 8px 6px;
+      padding: 6px 6px 6px 20px;
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.05);
+      background: transparent;
       cursor: pointer;
     }
+    #${UI_CONTAINER_ID} .uth-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
     #${UI_CONTAINER_ID} .uth-item input[type="checkbox"] {
-      margin-top: 4px;
+      margin: 0;
+      cursor: pointer;
     }
     #${UI_CONTAINER_ID} .uth-item-title {
       font-size: 13px;
@@ -457,16 +531,19 @@
   const hydrateSelectionFromStorage = () => {
     if (!storage) {
       updateSelectionCount();
+      updateSectionCheckboxes();
       return;
     }
     storage.get(STORAGE_KEY_SELECTION).then((stored) => {
       if (!Array.isArray(stored) || !stored.length) {
         updateSelectionCount();
+        updateSectionCheckboxes();
         return;
       }
       const validIndexes = stored.filter((idx) => uiState.items.some((item) => item.index === idx));
       if (!validIndexes.length) {
         updateSelectionCount();
+        updateSectionCheckboxes();
         return;
       }
 
@@ -479,6 +556,7 @@
         });
       }
       updateSelectionCount();
+      updateSectionCheckboxes();
     });
   };
 
@@ -605,6 +683,30 @@
     uiState.skippedList = null;
   };
 
+  const updateSectionCheckboxes = () => {
+    if (!uiState.container) return;
+    const sections = Array.from(uiState.container.querySelectorAll('.uth-section-header'));
+    sections.forEach((secHeader) => {
+      const sectionCheckbox = secHeader.querySelector('.uth-section-checkbox');
+      if (!sectionCheckbox) return;
+      
+      const itemCheckboxes = [];
+      let sibling = secHeader.nextElementSibling;
+      while (sibling && !sibling.classList.contains('uth-section-header')) {
+        const cb = sibling.querySelector('input[type="checkbox"]');
+        if (cb) itemCheckboxes.push(cb);
+        sibling = sibling.nextElementSibling;
+      }
+      
+      if (itemCheckboxes.length) {
+        const allChecked = itemCheckboxes.every(cb => cb.checked);
+        const someChecked = itemCheckboxes.some(cb => cb.checked);
+        sectionCheckbox.checked = allChecked;
+        sectionCheckbox.indeterminate = someChecked && !allChecked;
+      }
+    });
+  };
+
   const updateSelectionCount = () => {
     if (!uiState.selectionCountEl) return;
     const total = uiState.items.length;
@@ -633,6 +735,7 @@
 
     updateSelectionCount();
     persistSelection();
+    updateSectionCheckboxes();
   };
 
   const onCheckboxChange = (event) => {
@@ -646,6 +749,7 @@
     }
     updateSelectionCount();
     persistSelection();
+    updateSectionCheckboxes();
   };
 
   const createListItem = (item) => {
@@ -774,11 +878,68 @@
     list.className = 'uth-list';
 
     if (videoItems.length) {
-      videoItems.forEach((item) => list.appendChild(createListItem(item)));
+      const sectionsMap = new Map();
+      videoItems.forEach((item) => {
+        const secIdx = item.sectionIndex ?? 0;
+        const secTitle = item.sectionTitle ?? 'Course Content';
+        if (!sectionsMap.has(secIdx)) {
+          sectionsMap.set(secIdx, { title: secTitle, items: [] });
+        }
+        sectionsMap.get(secIdx).items.push(item);
+      });
+
+      const sortedSections = Array.from(sectionsMap.entries()).sort((a, b) => a[0] - b[0]);
+      sortedSections.forEach(([secIdx, secData]) => {
+        const sectionHeader = document.createElement('div');
+        sectionHeader.className = 'uth-section-header';
+
+        const sectionLabel = document.createElement('label');
+        sectionLabel.className = 'uth-section-label';
+
+        const sectionCheckbox = document.createElement('input');
+        sectionCheckbox.type = 'checkbox';
+        sectionCheckbox.className = 'uth-section-checkbox';
+
+        const sectionItemIndexes = secData.items.map((i) => i.index);
+        const allChecked = sectionItemIndexes.every((idx) => uiState.selectedIndexes.has(idx));
+        const someChecked = sectionItemIndexes.some((idx) => uiState.selectedIndexes.has(idx));
+
+        sectionCheckbox.checked = allChecked;
+        sectionCheckbox.indeterminate = someChecked && !allChecked;
+
+        sectionCheckbox.addEventListener('change', (e) => {
+          const checked = e.currentTarget.checked;
+          sectionItemIndexes.forEach((idx) => {
+            if (checked) {
+              uiState.selectedIndexes.add(idx);
+            } else {
+              uiState.selectedIndexes.delete(idx);
+            }
+            const itemCheckbox = panel.querySelector(`input[data-item-index="${idx}"]`);
+            if (itemCheckbox) itemCheckbox.checked = checked;
+          });
+          updateSelectionCount();
+          persistSelection();
+          updateSectionCheckboxes();
+        });
+
+        const sectionTitleSpan = document.createElement('span');
+        sectionTitleSpan.className = 'uth-section-title';
+        sectionTitleSpan.textContent = secData.title;
+
+        sectionLabel.appendChild(sectionCheckbox);
+        sectionLabel.appendChild(sectionTitleSpan);
+        sectionHeader.appendChild(sectionLabel);
+        list.appendChild(sectionHeader);
+
+        secData.items.forEach((item) => {
+          list.appendChild(createListItem(item));
+        });
+      });
     } else {
       const emptyState = document.createElement('p');
       emptyState.className = 'uth-description';
-      emptyState.textContent = 'No playable lectures detected in this section.';
+      emptyState.textContent = 'No playable lectures detected.';
       list.appendChild(emptyState);
     }
 
@@ -845,7 +1006,30 @@
     console.info(`Udemy Transcript Helper: ${items.length} lectures detected.`);
   };
 
+  const expandAllSections = async () => {
+    const hasToggles = await waitForCondition(() => {
+      const toggles = document.querySelectorAll('[data-purpose^="section-panel-"] button[aria-expanded]');
+      return toggles.length ? true : null;
+    }, { timeout: 15000 });
+
+    if (!hasToggles) {
+      console.warn('Udemy Transcript Helper: section panels not detected.');
+      return;
+    }
+
+    const toggles = Array.from(document.querySelectorAll('[data-purpose^="section-panel-"] button[aria-expanded="false"]'));
+    for (const toggle of toggles) {
+      toggle.click();
+      await waitMs(300);
+    }
+    if (toggles.length > 0) {
+      await waitMs(1500);
+    }
+  };
+
   const showSelectionPanel = async () => {
+    await expandAllSections();
+
     const existingItems = findCurriculumItems();
     if (existingItems.length) {
       renderSelectionPanel(existingItems);
@@ -944,6 +1128,8 @@
           entries.push({
             videoNumber,
             title: item.title,
+            sectionIndex: item.sectionIndex ?? 0,
+            sectionTitle: item.sectionTitle ?? 'Course Content',
             lineNumber: lineIndex + 1,
             timestampSeconds: line.timestampSeconds ?? '',
             timestampRaw: line.rawTimestamp ?? '',
@@ -968,33 +1154,54 @@
   const buildTranscriptText = (entries) => {
     if (!entries.length) return '';
 
-    const grouped = entries.reduce((acc, entry) => {
-      const key = `${entry.videoNumber}::${entry.title}`;
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(entry);
+    const bySection = entries.reduce((acc, entry) => {
+      const secKey = `${entry.sectionIndex}::${entry.sectionTitle}`;
+      if (!acc[secKey]) acc[secKey] = {};
+      
+      const videoKey = `${entry.videoNumber}::${entry.title}`;
+      if (!acc[secKey][videoKey]) acc[secKey][videoKey] = [];
+      
+      acc[secKey][videoKey].push(entry);
       return acc;
     }, {});
 
-    const sections = Object.entries(grouped)
+    const sortedSections = Object.entries(bySection)
       .sort((a, b) => {
-        const [aNum] = a[0].split('::');
-        const [bNum] = b[0].split('::');
-        return Number(aNum) - Number(bNum);
-      })
-      .map(([key, items]) => {
-        const [videoNumber, title] = key.split('::');
-        const header = `Video ${videoNumber}: ${title}`;
-        const body = items
+        const [aIdx] = a[0].split('::');
+        const [bIdx] = b[0].split('::');
+        return Number(aIdx) - Number(bIdx);
+      });
+
+    const fileContentParts = [];
+
+    sortedSections.forEach(([secKey, videosMap]) => {
+      const [, sectionTitle] = secKey.split('::');
+      const secHeader = `Section: ${sectionTitle}`;
+      const secSeparator = '='.repeat(Math.max(secHeader.length, 40));
+      fileContentParts.push(`${secSeparator}\n${secHeader}\n${secSeparator}`);
+
+      const sortedVideos = Object.entries(videosMap)
+        .sort((a, b) => {
+          const [aNum] = a[0].split('::');
+          const [bNum] = b[0].split('::');
+          return Number(aNum) - Number(bNum);
+        });
+
+      sortedVideos.forEach(([videoKey, lines]) => {
+        const [videoNumber, title] = videoKey.split('::');
+        const videoHeader = `Video ${videoNumber}: ${title}`;
+        const body = lines
           .sort((a, b) => a.lineNumber - b.lineNumber)
           .map((entry) => {
             const prefix = entry.timestampRaw ? `[${entry.timestampRaw}] ` : '';
             return `${prefix}${entry.text}`;
           })
           .join('\n');
-        return `${header}\n${'-'.repeat(header.length)}\n${body}`;
+        fileContentParts.push(`${videoHeader}\n${'-'.repeat(videoHeader.length)}\n${body}`);
       });
+    });
 
-    return sections.join('\n\n');
+    return fileContentParts.join('\n\n');
   };
 
   const exportSelectionToText = async (selectionOverride, options = {}) => {
