@@ -35,9 +35,12 @@
   ];
 
   const CURRICULUM_ITEM_SELECTORS = [
-    '[data-purpose^="curriculum-item-"]',
+    '[data-purpose="curriculum-section-container"] [data-purpose^="curriculum-item-"]',
+    '[data-purpose="curriculum-section-container"] .curriculum-item-link--curriculum-item--OVP5S',
+    '[data-purpose="curriculum-section-container"] .item-link--common--j8WLy',
+    '[data-purpose^="curriculum-item-"]:not([data-purpose="curriculum-item-viewer-content"])',
     '.curriculum-item-link--curriculum-item--OVP5S',
-    '.item-link--common--j8WLy'
+    '.item-link--common--j8WLy:not([data-purpose^="go-to-"])'
   ];
 
   const CURRICULUM_ITEM_TITLE_SELECTORS = [
@@ -48,6 +51,12 @@
 
   const READY_EVENT = 'udemy-transcript-helper-ready';
   const AUTO_START_DELAY_MS = 7000;
+  const COURSE_TITLE_SELECTORS = [
+    'h1[data-purpose="lead-title"]',
+    '.udlite-heading-xl',
+    '.course-title',
+    '[data-purpose="course-title"]'
+  ];
 
   const cleanText = (text) => text.replace(/\s+/g, ' ').trim();
 
@@ -94,6 +103,18 @@
     });
 
   const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+
+  const getCourseTitle = () => {
+    const el = COURSE_TITLE_SELECTORS.map((selector) => document.querySelector(selector)).find(Boolean);
+    const text = cleanText(el?.textContent ?? document.title ?? '');
+    if (text) return text;
+    return 'Udemy Course';
+  };
+
+  const sanitizeFilename = (input, fallback = 'udemy-transcripts') => {
+    const candidate = cleanText(input).replace(/[\\/:*?"<>|]+/g, '').trim();
+    return candidate || fallback;
+  };
 
   const triggerDownload = (filename, content, mime = 'text/plain') => {
     const blob = new Blob([content], { type: mime });
@@ -157,11 +178,19 @@
     TRANSCRIPT_TOGGLE_SELECTORS.map((selector) => root.querySelector(selector)).find(Boolean);
 
   const getCurriculumItemType = (element) => {
-    const iconUse = element.querySelector('svg use');
-    const hrefValue = iconUse?.getAttribute?.('href') || iconUse?.getAttribute?.('xlink:href') || '';
+    const iconUses = Array.from(element.querySelectorAll('svg use'));
+    let hrefValue = '';
+    for (const use of iconUses) {
+      const href = use.getAttribute('href') || use.getAttribute('xlink:href') || '';
+      if (href && href !== '#icon-tick' && href !== '#icon-checked') {
+        hrefValue = href;
+        break;
+      }
+    }
     const buttonLabelRaw = element.querySelector('button[aria-label]')?.getAttribute('aria-label') ?? '';
     const buttonLabel = buttonLabelRaw.toLowerCase();
-    const titleTextRaw = element.querySelector('[data-purpose="item-title"]')?.textContent ?? '';
+    const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => element.querySelector(sel)).find(Boolean);
+    const titleTextRaw = titleEl?.textContent ?? '';
     const titleText = cleanText(titleTextRaw).toLowerCase();
 
     const hasVideoIcon = /icon-(video|play|movie)/i.test(hrefValue);
@@ -184,18 +213,11 @@
   };
 
   const findCurriculumItems = () => {
-    const selector = CURRICULUM_ITEM_SELECTORS.join(',');
-    const elements = selector ? Array.from(document.querySelectorAll(selector)) : [];
-    const uniqueItems = [];
+    const activeSelector = CURRICULUM_ITEM_SELECTORS.find((selector) => document.querySelector(selector));
+    if (!activeSelector) return [];
 
-    elements.forEach((element) => {
-      const container = element.matches(CURRICULUM_ITEM_SELECTORS[0]) ? element : element.closest(CURRICULUM_ITEM_SELECTORS[0]);
-      if (container && !uniqueItems.includes(container)) {
-        uniqueItems.push(container);
-      }
-    });
-
-    return uniqueItems.map((element, index) => {
+    const elements = Array.from(document.querySelectorAll(activeSelector));
+    return elements.map((element, index) => {
       const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => element.querySelector(sel)).find(Boolean);
       const title = cleanText(titleEl?.textContent ?? `Video ${index + 1}`);
       const typeInfo = getCurriculumItemType(element);
@@ -844,17 +866,38 @@
     await showSelectionPanel();
   };
 
-  const ensureCurriculumElementClickable = (item) => {
-    if (!item?.element?.isConnected) {
+  const findSectionToggleForElement = (element) => {
+    const section = element?.closest?.('[data-purpose^="section-panel-"]');
+    if (!section) return null;
+    return section.querySelector('button[aria-expanded]');
+  };
+
+  const ensureSectionExpanded = async (element) => {
+    const toggle = findSectionToggleForElement(element);
+    if (!toggle) return true;
+    if (toggle.getAttribute('aria-expanded') === 'true') return true;
+    toggle.click();
+    const expanded = await waitForCondition(
+      () => toggle.getAttribute('aria-expanded') === 'true',
+      { timeout: 5000 }
+    );
+    return Boolean(expanded);
+  };
+
+  const ensureCurriculumElementClickable = async (item) => {
+    let element = item?.element?.isConnected ? item.element : null;
+    if (!element) {
       const refreshedItems = findCurriculumItems();
       const refreshed = refreshedItems.find((candidate) => candidate.index === item?.index && candidate.title === item?.title);
-      return refreshed?.element ?? null;
+      element = refreshed?.element ?? null;
     }
-    return item.element;
+    if (!element) return null;
+    await ensureSectionExpanded(element);
+    return element;
   };
 
   const collectTranscriptForItem = async (item, videoNumber) => {
-    const element = ensureCurriculumElementClickable(item);
+    const element = await ensureCurriculumElementClickable(item);
     if (!element) {
       console.warn(`Udemy Transcript Helper: curriculum item ${videoNumber} missing from DOM.`);
       addSkippedLecture({ videoNumber, title: item.title, reason: 'Curriculum element missing' });
@@ -976,7 +1019,10 @@
     }
 
       const text = buildTranscriptText(entries);
-      const filename = `udemy-transcripts-${Date.now()}.txt`;
+      const courseTitle = getCourseTitle();
+      const videoCount = selection.items.length;
+      const filenameBase = `${courseTitle} (${videoCount} videos)`;
+      const filename = `${sanitizeFilename(filenameBase)}.txt`;
       triggerDownload(filename, text, 'text/plain');
       console.info(`Udemy Transcript Helper: exported ${entries.length} transcript lines to ${filename}.`);
       return { filename, lineCount: entries.length, selection };

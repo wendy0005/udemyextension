@@ -14,14 +14,12 @@
     "default_title": "Udemy Transcript Helper"
   },
   "host_permissions": [
-    "https://www.udemy.com/*",
-    "https://cognizant.udemy.com/*"
+    "https://*.udemy.com/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://www.udemy.com/*",
-        "https://cognizant.udemy.com/*"
+        "https://*.udemy.com/*"
       ],
       "js": [
         "content-script.js"
