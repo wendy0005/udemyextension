@@ -241,8 +241,12 @@
     let absoluteIndex = 0;
 
     sections.forEach((sec, secIdx) => {
+      const purpose = sec.getAttribute('data-purpose') || '';
+      const match = purpose.match(/section-panel-(\d+)/);
+      const parsedSecIdx = match ? parseInt(match[1], 10) : secIdx;
+
       const sectionTitleEl = sec.querySelector('button[aria-expanded], [class*="section-title"]');
-      const sectionTitle = sectionTitleEl ? cleanText(sectionTitleEl.textContent) : `Section ${secIdx + 1}`;
+      const sectionTitle = sectionTitleEl ? cleanText(sectionTitleEl.textContent) : `Section ${parsedSecIdx + 1}`;
       
       const activeSelector = CURRICULUM_ITEM_SELECTORS.find((selector) => sec.querySelector(selector));
       const rawElements = activeSelector ? Array.from(sec.querySelectorAll(activeSelector)) : [];
@@ -251,10 +255,10 @@
       const seenKeys = new Set();
       
       rawElements.forEach(el => {
-        const purpose = el.getAttribute('data-purpose') || '';
+        const purposeAttr = el.getAttribute('data-purpose') || '';
         const titleEl = CURRICULUM_ITEM_TITLE_SELECTORS.map((sel) => el.querySelector(sel)).find(Boolean);
         const title = cleanText(titleEl?.textContent ?? '');
-        const key = purpose || title;
+        const key = purposeAttr || title;
         if (key && !seenKeys.has(key)) {
           seenKeys.add(key);
           uniqueElements.push(el);
@@ -275,7 +279,7 @@
           type,
           isVideo,
           sectionTitle,
-          sectionIndex: secIdx,
+          sectionIndex: parsedSecIdx,
           meta: typeInfo
         });
         absoluteIndex += 1;
@@ -1071,10 +1075,11 @@
   };
 
   const ensureSectionExpandedForPanelIndex = async (secIdx) => {
-    const sec = document.querySelector(`[data-purpose="section-panel-${secIdx}"]`);
-    if (!sec) return false;
-    
-    const toggle = sec.querySelector('button[aria-expanded]');
+    const toggle = await waitForCondition(() => {
+      const sec = document.querySelector(`[data-purpose="section-panel-${secIdx}"]`);
+      return sec?.querySelector('button[aria-expanded]') ?? null;
+    }, { timeout: 10000 });
+
     if (!toggle) return false;
     
     if (toggle.getAttribute('aria-expanded') === 'true') return true;
@@ -1094,15 +1099,19 @@
   const ensureCurriculumElementClickable = async (item) => {
     let element = item?.element?.isConnected ? item.element : null;
     
-    if (!element && typeof item?.sectionIndex === 'number') {
-      await ensureSectionExpandedForPanelIndex(item.sectionIndex);
+    if (!element) {
+      if (typeof item?.sectionIndex === 'number') {
+        await ensureSectionExpandedForPanelIndex(item.sectionIndex);
+      }
+      
+      element = await waitForCondition(() => {
+        const refreshedItems = findCurriculumItems();
+        const refreshed = refreshedItems.find((candidate) => candidate.title === item?.title && 
+          (candidate.sectionIndex === item?.sectionIndex || candidate.sectionTitle === item?.sectionTitle));
+        return refreshed?.element && refreshed.element.isConnected ? refreshed.element : null;
+      }, { timeout: 10000 });
     }
     
-    if (!element) {
-      const refreshedItems = findCurriculumItems();
-      const refreshed = refreshedItems.find((candidate) => candidate.index === item?.index && candidate.title === item?.title);
-      element = refreshed?.element ?? null;
-    }
     if (!element) return null;
     await ensureSectionExpanded(element);
     return element;
@@ -1121,7 +1130,8 @@
     
     const becameCurrent = await waitForCondition(() => {
       const refreshedItems = findCurriculumItems();
-      const refreshed = refreshedItems.find((candidate) => candidate.index === item.index && candidate.title === item.title);
+      const refreshed = refreshedItems.find((candidate) => candidate.title === item.title && 
+        (candidate.sectionIndex === item.sectionIndex || candidate.sectionTitle === item.sectionTitle));
       const el = refreshed?.element;
       if (!el) return false;
       const li = el.tagName === 'LI' ? el : el.closest('li');
