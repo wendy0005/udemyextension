@@ -1070,8 +1070,34 @@
     return Boolean(expanded);
   };
 
+  const ensureSectionExpandedForPanelIndex = async (secIdx) => {
+    const sec = document.querySelector(`[data-purpose="section-panel-${secIdx}"]`);
+    if (!sec) return false;
+    
+    const toggle = sec.querySelector('button[aria-expanded]');
+    if (!toggle) return false;
+    
+    if (toggle.getAttribute('aria-expanded') === 'true') return true;
+    
+    toggle.scrollIntoView?.({ behavior: 'auto', block: 'center' });
+    toggle.click();
+    
+    const expanded = await waitForCondition(() => {
+      const freshToggle = document.querySelector(`[data-purpose="section-panel-${secIdx}"] button[aria-expanded]`);
+      return freshToggle?.getAttribute('aria-expanded') === 'true';
+    }, { timeout: 8000 });
+    
+    await waitMs(300);
+    return Boolean(expanded);
+  };
+
   const ensureCurriculumElementClickable = async (item) => {
     let element = item?.element?.isConnected ? item.element : null;
+    
+    if (!element && typeof item?.sectionIndex === 'number') {
+      await ensureSectionExpandedForPanelIndex(item.sectionIndex);
+    }
+    
     if (!element) {
       const refreshedItems = findCurriculumItems();
       const refreshed = refreshedItems.find((candidate) => candidate.index === item?.index && candidate.title === item?.title);
@@ -1092,7 +1118,21 @@
 
     element.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
     element.click();
-    await waitMs(2500);
+    
+    const becameCurrent = await waitForCondition(() => {
+      const refreshedItems = findCurriculumItems();
+      const refreshed = refreshedItems.find((candidate) => candidate.index === item.index && candidate.title === item.title);
+      const el = refreshed?.element;
+      if (!el) return false;
+      const li = el.tagName === 'LI' ? el : el.closest('li');
+      return li?.getAttribute('aria-current') === 'true' || el.getAttribute('aria-current') === 'true';
+    }, { timeout: 10000 });
+
+    if (!becameCurrent) {
+      console.warn(`Udemy Transcript Helper: navigation to video ${videoNumber} might not have completed.`);
+    }
+
+    await waitMs(1500);
     const panel = await ensureTranscriptPanelOpen();
     if (!panel) {
       console.warn(`Udemy Transcript Helper: transcript panel not available for video ${videoNumber}.`);
